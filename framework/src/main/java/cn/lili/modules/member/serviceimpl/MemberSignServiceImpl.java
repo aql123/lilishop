@@ -63,6 +63,7 @@ public class MemberSignServiceImpl extends ServiceImpl<MemberSignMapper, MemberS
         //获取当前会员信息
         AuthUser authUser = UserContext.getCurrentUser();
         if (authUser != null) {
+
             //当前签到天数的前一天日期
             List<MemberSign> signs = this.baseMapper.getBeforeMemberSign(authUser.getId());
             //构建参数

@@ -63,6 +63,7 @@ public class StoreManagerController {
     @ApiImplicitParam(name = "storeId", value = "店铺ID", required = true, paramType = "path", dataType = "String")
     @GetMapping(value = "/get/detail/{storeId}")
     public ResultMessage<StoreDetailVO> detail(@PathVariable String storeId) {
+        // todo 对于刚提交审核的信息需要等待缓存失效后才能操作,否则缓存信息还在
         return ResultUtil.data(storeDetailService.getStoreDetailVO(storeId));
     }
 
@@ -125,5 +126,12 @@ public class StoreManagerController {
             return ResultUtil.data(list.get(0));
         }
         return ResultUtil.data(null);
+    }
+
+    @ApiOperation(value = "将所有店铺导入店员表")
+    @PostMapping("store/to/clerk")
+    public ResultMessage<Object> storeToClerk(){
+        this.storeService.storeToClerk();
+        return ResultUtil.success();
     }
 }

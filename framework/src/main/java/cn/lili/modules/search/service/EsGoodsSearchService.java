@@ -4,6 +4,7 @@ import cn.lili.common.vo.PageVO;
 import cn.lili.modules.search.entity.dos.EsGoodsIndex;
 import cn.lili.modules.search.entity.dos.EsGoodsRelatedInfo;
 import cn.lili.modules.search.entity.dto.EsGoodsSearchDTO;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springframework.data.elasticsearch.core.SearchPage;
 
 import java.util.List;
@@ -26,6 +27,15 @@ public interface EsGoodsSearchService {
     SearchPage<EsGoodsIndex> searchGoods(EsGoodsSearchDTO searchDTO, PageVO pageVo);
 
     /**
+     * 商品搜索
+     *
+     * @param searchDTO 搜索参数
+     * @param pageVo    分页参数
+     * @return 搜索结果
+     */
+    Page<EsGoodsIndex> searchGoodsByPage(EsGoodsSearchDTO searchDTO, PageVO pageVo);
+
+    /**
      * 获取筛选器
      *
      * @param goodsSearch 搜索条件
@@ -40,7 +50,7 @@ public interface EsGoodsSearchService {
      * @param skuIds SkuId列表
      * @return ES商品列表
      */
-    List<EsGoodsIndex> getEsGoodsBySkuIds(List<String> skuIds);
+    List<EsGoodsIndex> getEsGoodsBySkuIds(List<String> skuIds, PageVO pageVo);
 
     /**
      * 根据id获取商品索引

@@ -18,7 +18,7 @@ import javax.validation.ConstraintViolationException;
 import java.util.List;
 
 /**
- * 全局异常异常处理
+ * 异常处理
  *
  * @author Chopper
  */
@@ -59,6 +59,18 @@ public class GlobalControllerExceptionHandler {
                 message += ":" + serviceException.getMsg();
             }
 
+            // 对一些特殊异常处理，不再打印error级别的日志
+            assert serviceException.getResultCode() != null;
+            if (serviceException.getResultCode().equals(ResultCode.DEMO_SITE_EXCEPTION)) {
+                log.debug("[DEMO_SITE_EXCEPTION]:{}", serviceException.getResultCode().message(), e);
+                return ResultUtil.error(code, message);
+            }
+            if (serviceException.getResultCode().equals(ResultCode.USER_AUTH_EXPIRED)) {
+                log.debug("403 :{}", serviceException.getResultCode().message(), e);
+                return ResultUtil.error(code, message);
+            }
+
+
             log.error("全局异常[ServiceException]:{}-{}", serviceException.getResultCode().code(), serviceException.getResultCode().message(), e);
             return ResultUtil.error(code, message);
 
@@ -74,6 +86,15 @@ public class GlobalControllerExceptionHandler {
         }
         return ResultUtil.error(ResultCode.ERROR.code(), errorMsg);
     }
+/*
+    @ExceptionHandler(ConstraintViolationException.class)
+    @ResponseStatus(value = HttpStatus.BAD_REQUEST)
+    public ResultMessage<Object> constraintExceptionHandler(HttpServletRequest request, final Exception e, HttpServletResponse response) {
+
+        log.error("全局异常[RuntimeException]:", e);
+
+        return ResultUtil.error(001, e.getMessage());
+    }*/
 
     @ExceptionHandler(RuntimeException.class)
     @ResponseStatus(value = HttpStatus.BAD_REQUEST)

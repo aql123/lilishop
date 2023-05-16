@@ -4,9 +4,11 @@ import cn.hutool.core.convert.Convert;
 import cn.hutool.core.text.CharSequenceUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import cn.lili.cache.Cache;
 import cn.lili.common.enums.PromotionTypeEnum;
 import cn.lili.common.vo.PageVO;
 import cn.lili.modules.goods.entity.dos.GoodsSku;
+import cn.lili.modules.goods.entity.dto.GoodsSkuDTO;
 import cn.lili.modules.goods.entity.vos.GoodsVO;
 import cn.lili.modules.goods.service.GoodsService;
 import cn.lili.modules.goods.service.GoodsSkuService;
@@ -27,7 +29,7 @@ import cn.lili.mybatis.util.PageUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -35,6 +37,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 促销商品业务层实现
@@ -69,6 +72,9 @@ public class PromotionGoodsServiceImpl extends ServiceImpl<PromotionGoodsMapper,
     @Autowired
     private EsGoodsIndexService goodsIndexService;
 
+    @Autowired
+    private Cache cache;
+
     @Override
     public List<PromotionGoods> findSkuValidPromotion(String skuId, String storeIds) {
 
@@ -88,7 +94,28 @@ public class PromotionGoodsServiceImpl extends ServiceImpl<PromotionGoodsMapper,
     }
 
     @Override
-    public IPage<PromotionGoods> pageFindAll(PromotionGoodsSearchParams searchParams, PageVO pageVo) {
+    public List<PromotionGoods> findSkuValidPromotions(List<GoodsSkuDTO> skus) {
+        List<String> categories = skus.stream().map(GoodsSku::getCategoryPath).collect(Collectors.toList());
+        List<String> skuIds = skus.stream().map(GoodsSku::getId).collect(Collectors.toList());
+        List<String> categoriesPath = new ArrayList<>();
+        categories.forEach(i -> {
+                    if (CharSequenceUtil.isNotEmpty(i)) {
+                        categoriesPath.addAll(Arrays.asList(i.split(",")));
+                    }
+                }
+        );
+        QueryWrapper<PromotionGoods> queryWrapper = new QueryWrapper<>();
+
+        queryWrapper.and(i -> i.or(j -> j.in(SKU_ID_COLUMN, skuIds))
+                .or(n -> n.eq("scope_type", PromotionsScopeTypeEnum.ALL.name()))
+                .or(n -> n.and(k -> k.eq("scope_type", PromotionsScopeTypeEnum.PORTION_GOODS_CATEGORY.name())
+                        .and(l -> l.in("scope_id", categoriesPath)))));
+        queryWrapper.and(i -> i.or(PromotionTools.queryPromotionStatus(PromotionsStatusEnum.START)).or(PromotionTools.queryPromotionStatus(PromotionsStatusEnum.NEW)));
+        return this.list(queryWrapper);
+    }
+
+    @Override
+    public Page<PromotionGoods> pageFindAll(PromotionGoodsSearchParams searchParams, PageVO pageVo) {
         return this.page(PageUtil.initPage(pageVo), searchParams.queryWrapper());
     }
 
@@ -244,6 +271,20 @@ public class PromotionGoodsServiceImpl extends ServiceImpl<PromotionGoodsMapper,
         }
     }
 
+    @Override
+    public void updatePromotionGoodsStock(String skuId, Integer quantity) {
+        LambdaQueryWrapper<PromotionGoods> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(PromotionGoods::getSkuId, skuId);
+        this.list(queryWrapper).forEach(promotionGoods -> {
+            String promotionStockKey = PromotionGoodsService.getPromotionGoodsStockCacheKey(PromotionTypeEnum.valueOf(promotionGoods.getPromotionType()), promotionGoods.getPromotionId(), promotionGoods.getSkuId());
+            cache.remove(promotionStockKey);
+        });
+        LambdaUpdateWrapper<PromotionGoods> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(PromotionGoods::getSkuId, skuId);
+        updateWrapper.set(PromotionGoods::getQuantity, quantity);
+        this.update(updateWrapper);
+    }
+
     /**
      * 更新促销活动商品库存
      *
@@ -280,6 +321,13 @@ public class PromotionGoodsServiceImpl extends ServiceImpl<PromotionGoodsMapper,
         LambdaQueryWrapper<PromotionGoods> queryWrapper = new LambdaQueryWrapper<PromotionGoods>().in(PromotionGoods::getPromotionId, promotionIds);
         this.remove(queryWrapper);
     }
+
+    @Override
+    public void deletePromotionGoodsByGoods(List<String> goodsIds) {
+        LambdaQueryWrapper<PromotionGoods> queryWrapper = new LambdaQueryWrapper<PromotionGoods>().in(PromotionGoods::getGoodsId, goodsIds);
+        this.remove(queryWrapper);
+    }
+
 
     /**
      * 根据参数删除促销商品

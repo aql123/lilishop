@@ -2,14 +2,12 @@ package cn.lili.modules.permission.entity.vo;
 
 import cn.lili.common.utils.ObjectUtil;
 import cn.lili.elasticsearch.EsSuffix;
-import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.Accessors;
 import org.springframework.data.annotation.Id;
-import org.springframework.data.elasticsearch.annotations.DateFormat;
 import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
@@ -41,9 +39,8 @@ public class SystemLogVO implements Serializable {
 
 
     @ApiModelProperty(value = "日志记录时间")
-    @JsonFormat(timezone = "GMT+8", pattern = "yyyy-MM-dd HH:mm:ss")
-    @Field(type = FieldType.Date, format = DateFormat.basic_date_time, fielddata = true)
-    private Date createTime = new Date();
+    @Field(type = FieldType.Long)
+    private Long createTime = new Date().getTime();
 
     @ApiModelProperty(value = "请求用户")
     @Field(type = FieldType.Text)
