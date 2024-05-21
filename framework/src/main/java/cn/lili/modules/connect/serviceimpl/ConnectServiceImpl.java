@@ -5,7 +5,6 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import cn.lili.cache.Cache;
-import cn.lili.cache.CachePrefix;
 import cn.lili.common.enums.ClientTypeEnum;
 import cn.lili.common.enums.ResultCode;
 import cn.lili.common.exception.ServiceException;
@@ -125,24 +124,18 @@ public class ConnectServiceImpl extends ServiceImpl<ConnectMapper, Connect> impl
     @Transactional
     public Token miniProgramAutoLogin(WechatMPLoginParams params) {
 
-        Object cacheData = cache.get(CachePrefix.WECHAT_SESSION_PARAMS.getPrefix() + params.getUuid());
         Map<String, String> map = new HashMap<>(3);
-        if (cacheData == null) {
-            //得到微信小程序联合登陆信息
-            JSONObject json = this.getConnect(params.getCode());
-            //存储session key 后续登录用得到
-            String sessionKey = json.getStr("session_key");
-            String unionId = json.getStr("unionid");
-            String openId = json.getStr("openid");
-            map.put("sessionKey", sessionKey);
-            map.put("unionId", unionId);
-            map.put("openId", openId);
-            cache.put(CachePrefix.WECHAT_SESSION_PARAMS.getPrefix() + params.getUuid(), map, 900L);
-        } else {
-            map = (Map<String, String>) cacheData;
-        }
-        //微信联合登陆参数
+        //得到微信小程序联合登陆信息
+        JSONObject json = this.getConnect(params.getCode());
+        //存储session key 后续登录用得到
+        String sessionKey = json.getStr("session_key");
+        String unionId = json.getStr("unionid");
+        String openId = json.getStr("openid");
+        map.put("sessionKey", sessionKey);
+        map.put("unionId", unionId);
+        map.put("openId", openId);
 
+        //微信联合登陆参数
         return phoneMpBindAndLogin(map.get("sessionKey"), params, map.get("openId"), map.get("unionId"));
     }
 
@@ -191,15 +184,11 @@ public class ConnectServiceImpl extends ServiceImpl<ConnectMapper, Connect> impl
                 String phone = (String) userInfo.get("purePhoneNumber");
                 connectAuthUser.setUsername("m" + phone);
                 connectAuthUser.setPhone(phone);
-                connectAuthUser.setSource(ConnectEnum.WECHAT.name());
-                connectAuthUser.setType(ClientTypeEnum.WECHAT_MP.name());
-
             } else {
                 connectAuthUser.setUsername(UuidUtils.getUUID());
-                connectAuthUser.setSource(ConnectEnum.WECHAT.name());
-                connectAuthUser.setType(ClientTypeEnum.WECHAT_MP.name());
             }
-
+            connectAuthUser.setSource(ConnectEnum.WECHAT);
+            connectAuthUser.setType(ClientTypeEnum.WECHAT_MP);
 
             AuthToken authToken = new AuthToken();
             authToken.setUnionId(unionId);
@@ -221,7 +210,7 @@ public class ConnectServiceImpl extends ServiceImpl<ConnectMapper, Connect> impl
                         connectQueryDTO.getUnionType())
                 .eq(CharSequenceUtil.isNotEmpty(connectQueryDTO.getUnionId()), Connect::getUnionId,
                         connectQueryDTO.getUnionId());
-        return this.getOne(queryWrapper);
+        return this.getOne(queryWrapper, false);
     }
 
     @Override
@@ -270,33 +259,39 @@ public class ConnectServiceImpl extends ServiceImpl<ConnectMapper, Connect> impl
      */
     private Token unionLoginCallback(ConnectAuthUser authUser, boolean longTerm) {
 
-
         try {
-            LambdaQueryWrapper<Connect> queryWrapper = new LambdaQueryWrapper<Connect>();
-            //使用UnionId登录
-            if (StrUtil.isNotBlank(authUser.getToken().getUnionId())) {
-                queryWrapper.eq(Connect::getUnionId, authUser.getToken().getUnionId())
-                        .eq(Connect::getUnionType, authUser.getSource());
-            } else {
-                //使用OpenID登录
-                SourceEnum sourceEnum = SourceEnum.getSourceEnum(ConnectEnum.valueOf(authUser.getType()),
-                        ClientTypeEnum.valueOf(authUser.getSource()));
-                queryWrapper.eq(Connect::getUnionId, authUser.getToken().getUnionId())
-                        .eq(Connect::getUnionType, sourceEnum.name());
+            Member member = null;
+            //判断是否传递手机号，如果传递手机号则使用手机号登录
+            if (StrUtil.isNotBlank(authUser.getPhone())) {
+                member = memberService.findByMobile(authUser.getPhone());
             }
+            //如果未查到手机号的会员则使用第三方登录
+            if (member == null) {
+                LambdaQueryWrapper<Connect> queryWrapper = new LambdaQueryWrapper<Connect>();
+                //使用UnionId登录
+                if (authUser.getToken() != null && StrUtil.isNotBlank(authUser.getToken().getUnionId())) {
+                    queryWrapper.eq(Connect::getUnionId, authUser.getToken().getUnionId())
+                            .eq(Connect::getUnionType, authUser.getSource());
+                } else {
+                    //使用OpenID登录
+                    SourceEnum sourceEnum = SourceEnum.getSourceEnum(authUser.getSource(), authUser.getType());
+                    queryWrapper.eq(Connect::getUnionId, authUser.getUuid())
+                            .eq(Connect::getUnionType, sourceEnum.name());
+                }
 
-            //查询绑定关系
-            Connect connect = this.getOne(queryWrapper);
-            Member member = new Member();
-            if (connect == null) {
-                member = memberService.autoRegister(authUser);
-            } else {
-                //查询会员
-                member = memberService.getById(connect.getUserId());
-                //如果未绑定会员，则把刚才查询到的联合登录表数据删除
-                if (member == null) {
-                    this.remove(queryWrapper);
+                //查询绑定关系
+                Connect connect = this.getOne(queryWrapper);
+
+                if (connect == null) {
                     member = memberService.autoRegister(authUser);
+                } else {
+                    //查询会员
+                    member = memberService.getById(connect.getUserId());
+                    //如果未绑定会员，则把刚才查询到的联合登录表数据删除
+                    if (member == null) {
+                        this.remove(queryWrapper);
+                        member = memberService.autoRegister(authUser);
+                    }
                 }
             }
 
@@ -371,7 +366,7 @@ public class ConnectServiceImpl extends ServiceImpl<ConnectMapper, Connect> impl
             }
             //初始化
             Security.addProvider(new BouncyCastleProvider());
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS7Padding", "BC");
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS7Padding");
             SecretKeySpec spec = new SecretKeySpec(keyByte, "AES");
             AlgorithmParameters parameters = AlgorithmParameters.getInstance("AES");
             parameters.init(new IvParameterSpec(ivByte));

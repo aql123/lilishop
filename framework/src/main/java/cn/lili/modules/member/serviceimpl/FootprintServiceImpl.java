@@ -16,7 +16,6 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
@@ -39,7 +38,6 @@ public class FootprintServiceImpl extends ServiceImpl<FootprintMapper, FootPrint
     private GoodsSkuService goodsSkuService;
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public FootPrint saveFootprint(FootPrint footPrint) {
         LambdaQueryWrapper<FootPrint> queryWrapper = Wrappers.lambdaQuery();
         queryWrapper.eq(FootPrint::getMemberId, footPrint.getMemberId());
@@ -87,17 +85,16 @@ public class FootprintServiceImpl extends ServiceImpl<FootprintMapper, FootPrint
             List<EsGoodsIndex> collect = IntStream.range(0, goodsSkuByIdFromCache.size())
                     .mapToObj(i -> {
                         if (goodsSkuByIdFromCache.get(i) == null) {
-                            EsGoodsIndex esGoodsIndex = new EsGoodsIndex();
-                            FootPrint footPrint = footPrintPages.getRecords().get(i);
-                            esGoodsIndex.setGoodsId(footPrint.getGoodsId());
-                            esGoodsIndex.setId(footPrint.getSkuId());
-                            esGoodsIndex.setReleaseTime(footPrintPages.getRecords().get(i).getCreateTime().getTime());
-                            return esGoodsIndex;
+                            return null;
                         }
-                        Optional<FootPrint> first = footPrintPages.getRecords().stream().filter(j -> j.getSkuId().equals(goodsSkuByIdFromCache.get(i).getId())).findFirst();
+                        Optional<FootPrint> first =
+                                footPrintPages.getRecords().stream().filter(j -> j.getSkuId().equals(goodsSkuByIdFromCache.get(i).getId())).findFirst();
                         return first.map(footPrint -> new EsGoodsIndex(goodsSkuByIdFromCache.get(i), footPrint.getCreateTime())).orElseGet(() -> new EsGoodsIndex(goodsSkuByIdFromCache.get(i)));
                     })
                     .collect(Collectors.toList());
+
+            collect.removeIf(Objects::isNull);
+
             esGoodsIndexIPage.setPages(footPrintPages.getPages());
             esGoodsIndexIPage.setRecords(collect);
             esGoodsIndexIPage.setTotal(footPrintPages.getTotal());

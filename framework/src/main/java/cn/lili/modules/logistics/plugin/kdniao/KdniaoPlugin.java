@@ -63,7 +63,7 @@ public class KdniaoPlugin implements LogisticsPlugin {
             Map<String, String> params = new HashMap<>(8);
             params.put("RequestData", urlEncoder(requestData, "UTF-8"));
             params.put("EBusinessID", logisticsSetting.getKdniaoEbusinessID());
-            params.put("RequestType", "1002");
+            params.put("RequestType", logisticsSetting.getRequestType());
             String dataSign = encrypt(requestData, logisticsSetting.getKdniaoAppKey(), "UTF-8");
             params.put("DataSign", urlEncoder(dataSign, "UTF-8"));
             params.put("DataType", "2");
@@ -112,9 +112,9 @@ public class KdniaoPlugin implements LogisticsPlugin {
     }
 
     @Override
-    public Map<String,Object> labelOrder(LabelOrderDTO labelOrderDTO) {
+    public Map<String, Object> labelOrder(LabelOrderDTO labelOrderDTO) {
         try {
-            Map<String,Object> resultMap = new HashMap();
+            Map<String, Object> resultMap = new HashMap();
             //订单
             Order order = labelOrderDTO.getOrder();
             //订单货物
@@ -200,12 +200,13 @@ public class KdniaoPlugin implements LogisticsPlugin {
             JSONObject obj = JSONObject.parseObject(result);
             log.info("电子面单响应：{}", result);
             if (!"100".equals(obj.getString("ResultCode"))) {
-                resultMap.put("Reason",obj.getString("Reason"));
-                return resultMap;
+//                resultMap.put("Reason",obj.getString("Reason"));
+                throw new ServiceException(obj.getString("Reason"));
+//                return resultMap;
             }
 
             JSONObject orderJson = JSONObject.parseObject(obj.getString("Order"));
-            resultMap.put("printTemplate",obj.getString("PrintTemplate"));
+            resultMap.put("printTemplate", obj.getString("PrintTemplate"));
             return resultMap;
         } catch (Exception e) {
             e.printStackTrace();

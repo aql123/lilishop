@@ -50,6 +50,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.update.UpdateRequest;
@@ -66,11 +67,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.SearchPage;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -178,7 +179,7 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
                     skuCountQueryWrapper.eq("auth_flag", GoodsAuthEnum.PASS.name());
                     skuCountQueryWrapper.eq("market_enable", GoodsStatusEnum.UPPER.name());
                     skuCountQueryWrapper.eq("delete_flag", false);
-                    skuCountQueryWrapper.ge("quantity", 0);
+                    skuCountQueryWrapper.gt("quantity", 0);
                     resultMap = new HashMap<>();
                     resultMap.put(KEY_SUCCESS, 0L);
                     resultMap.put(KEY_FAIL, 0L);
@@ -234,6 +235,9 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
                         long count = esGoodsIndices.stream().filter(j -> j.getGoodsId().equals(esGoodsIndex.getGoodsId())).count();
                         if (count >= 1) {
                             skuSource -= count;
+                        }
+                        if (skuSource <= 0) {
+                            skuSource = 1;
                         }
                         esGoodsIndex.setSkuSource(skuSource);
 
@@ -364,7 +368,6 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
             keywordsList.forEach(item -> customWordsArrayList.add(new CustomWords(item)));
             //这里采用先批量删除再插入的方法，故意这么做。否则需要挨个匹配是否存在，性能消耗更大
             if (CollUtil.isNotEmpty(customWordsArrayList)) {
-                customWordsService.deleteBathByName(keywordsList);
                 customWordsService.insertBatchCustomWords(customWordsArrayList);
             }
         } catch (Exception e) {
@@ -412,14 +415,20 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
         }
         update.setScript(new Script(script.toString()));
         update.setConflicts("proceed");
-        try {
-            BulkByScrollResponse bulkByScrollResponse = client.updateByQuery(update, RequestOptions.DEFAULT);
-            if (bulkByScrollResponse.getVersionConflicts() > 0) {
-                throw new RetryException("更新商品索引失败，es内容版本冲突");
+
+        this.client.updateByQueryAsync(update, RequestOptions.DEFAULT, new ActionListener<BulkByScrollResponse>() {
+            @Override
+            public void onResponse(BulkByScrollResponse bulkByScrollResponse) {
+                if (bulkByScrollResponse.getVersionConflicts() > 0) {
+                    throw new RetryException("更新商品索引失败，es内容版本冲突");
+                }
             }
-        } catch (IOException e) {
-            log.error("更新商品索引异常", e);
-        }
+
+            @Override
+            public void onFailure(Exception e) {
+                log.error("更新商品索引异常", e);
+            }
+        });
     }
 
     /**
@@ -429,24 +438,31 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
      */
     @Override
     public void updateBulkIndex(List<EsGoodsIndex> goodsIndices) {
-        try {
-            //索引名称拼接
-            String indexName = getIndexName();
+        //索引名称拼接
+        String indexName = getIndexName();
 
-            BulkRequest request = new BulkRequest();
+        BulkRequest request = new BulkRequest();
 
-            for (EsGoodsIndex goodsIndex : goodsIndices) {
-                UpdateRequest updateRequest = new UpdateRequest(indexName, goodsIndex.getId());
+        for (EsGoodsIndex goodsIndex : goodsIndices) {
+            UpdateRequest updateRequest = new UpdateRequest(indexName, goodsIndex.getId());
 
-                JSONObject jsonObject = JSONUtil.parseObj(goodsIndex);
-                jsonObject.set("releaseTime", goodsIndex.getReleaseTime());
-                updateRequest.doc(jsonObject);
-                request.add(updateRequest);
-            }
-            client.bulk(request, RequestOptions.DEFAULT);
-        } catch (IOException e) {
-            log.error("批量更新商品索引异常", e);
+            JSONObject jsonObject = JSONUtil.parseObj(goodsIndex);
+            jsonObject.set("releaseTime", goodsIndex.getReleaseTime());
+            updateRequest.doc(jsonObject);
+            request.add(updateRequest);
         }
+        this.client.bulkAsync(request, RequestOptions.DEFAULT, new ActionListener<BulkResponse>() {
+            @Override
+            public void onResponse(BulkResponse bulkItemResponses) {
+                // 判断索引如果不存在的处理
+                log.info("批量更新商品索引结果：{}", bulkItemResponses.buildFailureMessage());
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                log.error("批量更新商品索引异常", e);
+            }
+        });
     }
 
     /**
@@ -465,14 +481,21 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
         deleteByQueryRequest.setQuery(boolQueryBuilder);
         deleteByQueryRequest.indices(getIndexName());
         deleteByQueryRequest.setConflicts("proceed");
-        try {
-            BulkByScrollResponse bulkByScrollResponse = client.deleteByQuery(deleteByQueryRequest, RequestOptions.DEFAULT);
-            if (bulkByScrollResponse.getVersionConflicts() > 0) {
-                throw new RetryException("删除索引失败，es内容版本冲突");
+        this.client.deleteByQueryAsync(deleteByQueryRequest, RequestOptions.DEFAULT, new ActionListener<BulkByScrollResponse>() {
+
+            @Override
+            public void onResponse(BulkByScrollResponse bulkByScrollResponse) {
+                if (bulkByScrollResponse.getVersionConflicts() > 0) {
+                    throw new RetryException("删除索引失败，es内容版本冲突");
+                }
             }
-        } catch (IOException e) {
-            log.error("删除索引异常", e);
-        }
+
+            @Override
+            public void onFailure(Exception e) {
+                throw new RetryException("删除索引失败，" + e.getMessage());
+            }
+        });
+
     }
 
     /**
@@ -672,14 +695,30 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
     @Override
     public void deleteEsGoodsPromotionByPromotionKey(String promotionsKey) {
         ThreadUtil.execAsync(() -> {
-            BulkRequest bulkRequest = new BulkRequest();
-            for (EsGoodsIndex goodsIndex : this.goodsIndexRepository.findAll()) {
-                UpdateRequest updateRequest = this.removePromotionByPromotionKey(goodsIndex, promotionsKey);
-                if (updateRequest != null) {
-                    bulkRequest.add(updateRequest);
+            for (int i = 0; ; i++) {
+                BulkRequest bulkRequest = new BulkRequest();
+
+                NativeSearchQueryBuilder nativeSearchQueryBuilder = new NativeSearchQueryBuilder();
+                nativeSearchQueryBuilder.withQuery(QueryBuilders.matchAllQuery());
+                nativeSearchQueryBuilder.withPageable(PageRequest.of(i, 1000));
+                try {
+                    SearchHits<EsGoodsIndex> esGoodsIndices = this.restTemplate.search(nativeSearchQueryBuilder.build(), EsGoodsIndex.class);
+                    if (esGoodsIndices.isEmpty() || esGoodsIndices.getSearchHits().isEmpty()) {
+                        break;
+                    }
+                    for (SearchHit<EsGoodsIndex> searchHit : esGoodsIndices.getSearchHits()) {
+                        EsGoodsIndex goodsIndex = searchHit.getContent();
+                        UpdateRequest updateRequest = this.removePromotionByPromotionKey(goodsIndex, promotionsKey);
+                        if (updateRequest != null) {
+                            bulkRequest.add(updateRequest);
+                        }
+                    }
+                    this.executeBulkUpdateRequest(bulkRequest);
+                } catch (Exception e) {
+                    log.error("删除索引中指定的促销活动id的促销活动失败！key: {}", promotionsKey, e);
+                    return;
                 }
             }
-            this.executeBulkUpdateRequest(bulkRequest);
         });
     }
 
@@ -863,16 +902,22 @@ public class EsGoodsIndexServiceImpl extends BaseElasticsearchService implements
         if (bulkRequest.requests().isEmpty()) {
             return;
         }
-        try {
-            BulkResponse responses = this.client.bulk(bulkRequest, RequestOptions.DEFAULT);
-            if (responses.hasFailures()) {
-                log.info("批量更新商品索引的促销信息中出现部分异常：{}", responses.buildFailureMessage());
-            } else {
-                log.info("批量更新商品索引的促销信息结果：{}", responses.status());
+        this.client.bulkAsync(bulkRequest, RequestOptions.DEFAULT, new ActionListener<BulkResponse>() {
+            @Override
+            public void onResponse(BulkResponse bulkItemResponses) {
+                if (bulkItemResponses.hasFailures()) {
+                    log.info("批量更新商品索引的促销信息中出现部分异常：{}", bulkItemResponses.buildFailureMessage());
+                } else {
+                    log.info("批量更新商品索引的促销信息结果：{}", bulkItemResponses.status());
+                }
             }
-        } catch (IOException e) {
-            log.error("批量更新商品索引的促销信息出现异常！", e);
-        }
+
+            @Override
+            public void onFailure(Exception e) {
+                log.error("批量更新商品索引的促销信息出现异常！", e);
+            }
+        });
+
     }
 
     /**

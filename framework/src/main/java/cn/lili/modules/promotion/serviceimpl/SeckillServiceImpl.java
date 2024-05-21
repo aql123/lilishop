@@ -153,7 +153,7 @@ public class SeckillServiceImpl extends AbstractPromotionsServiceImpl<SeckillMap
         this.checkPromotions(promotions);
         //如果申请结束时间在当前时间之前
         if (promotions.getApplyEndTime().before(new Date()) || promotions.getApplyEndTime().after(promotions.getStartTime())) {
-            throw new ServiceException(ResultCode.STORE_NAME_EXIST_ERROR);
+            throw new ServiceException(ResultCode.APPLY_END_TIME_ERROR);
         }
         boolean result = this.updateById(promotions);
         seckillApplyService.updateSeckillApplyTime(promotions);
@@ -244,6 +244,9 @@ public class SeckillServiceImpl extends AbstractPromotionsServiceImpl<SeckillMap
         super.initPromotion(promotions);
         if (promotions.getStartTime() != null && promotions.getEndTime() == null) {
             promotions.setEndTime(DateUtil.endOfDay(promotions.getStartTime()));
+        }
+        if (promotions.getApplyEndTime() == null && promotions.getStartTime() != null) {
+            promotions.setApplyEndTime(promotions.getStartTime());
         }
     }
 

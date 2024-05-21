@@ -84,11 +84,12 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
 
         //如果搜索词不为空，且明显不是sql注入，那么就将搜索词加入热搜词
         //PS:线上环境运行很多客户反馈被sql攻击，写在了搜索热词里，这里控制命中关键字就不做热词统计，如果线上比较严格可以调用关键词替换，不过不建议这么做
-        if (CharSequenceUtil.isNotBlank(searchDTO.getKeyword()) && !SqlFilter.hit(searchDTO.getKeyword())) {
+        if (CharSequenceUtil.isNotBlank(searchDTO.getKeyword()) && Boolean.FALSE.equals(SqlFilter.hit(searchDTO.getKeyword()))) {
             cache.incrementScore(CachePrefix.HOT_WORD.getPrefix(), searchDTO.getKeyword());
         }
         NativeSearchQueryBuilder searchQueryBuilder = createSearchQueryBuilder(searchDTO, pageVo);
         NativeSearchQuery searchQuery = searchQueryBuilder.build();
+        searchQuery.setTrackTotalHits(true);
         log.debug("searchGoods DSL:{}", searchQuery.getQuery());
         SearchHits<EsGoodsIndex> search = restTemplate.search(searchQuery, EsGoodsIndex.class);
         return SearchHitSupport.searchPageFor(search, searchQuery.getPageable());
@@ -96,6 +97,11 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
 
     @Override
     public Page<EsGoodsIndex> searchGoodsByPage(EsGoodsSearchDTO searchDTO, PageVO pageVo) {
+        // 判断商品索引是否存在
+        if (!restTemplate.indexOps(EsGoodsIndex.class).exists()) {
+            return null;
+        }
+
         SearchPage<EsGoodsIndex> esGoodsIndices = this.searchGoods(searchDTO, pageVo);
         Page<EsGoodsIndex> resultPage = new Page<>();
         if (esGoodsIndices != null && !esGoodsIndices.getContent().isEmpty()) {
@@ -111,7 +117,12 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
 
     @Override
     public EsGoodsRelatedInfo getSelector(EsGoodsSearchDTO goodsSearch, PageVO pageVo) {
-        NativeSearchQueryBuilder builder = createSearchQueryBuilder(goodsSearch, pageVo);
+        // 判断商品索引是否存在
+        if (!restTemplate.indexOps(EsGoodsIndex.class).exists()) {
+            return null;
+        }
+
+        NativeSearchQueryBuilder builder = createSearchQueryBuilder(goodsSearch, null);
         //分类
         AggregationBuilder categoryNameBuilder = AggregationBuilders.terms("categoryNameAgg").field("categoryNamePath.keyword");
         builder.addAggregation(AggregationBuilders.terms("categoryAgg").field("categoryPath").subAggregation(categoryNameBuilder));
@@ -127,6 +138,7 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
         AggregationBuilder paramsNameBuilder = AggregationBuilders.terms("nameAgg").field(ATTR_NAME).subAggregation(sortBuilder).order(BucketOrder.aggregation("sortAgg", false)).subAggregation(valuesBuilder);
         builder.addAggregation(AggregationBuilders.nested("attrAgg", ATTR_PATH).subAggregation(paramsNameBuilder));
         NativeSearchQuery searchQuery = builder.build();
+        searchQuery.setMaxResults(0);
         SearchHits<EsGoodsIndex> search = restTemplate.search(searchQuery, EsGoodsIndex.class);
 
         log.debug("getSelector DSL:{}", searchQuery.getQuery());
@@ -280,22 +292,22 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
             List<? extends Terms.Bucket> categoryNameBuckets = categoryNameAgg.getBuckets();
 
 
-            String categoryNamePath = categoryPath;
             if (!categoryNameBuckets.isEmpty()) {
-                categoryNamePath = categoryNameBuckets.get(0).getKey().toString();
-            }
-            String[] split = ArrayUtil.distinct(categoryPath.split(","));
-            String[] nameSplit = categoryNamePath.split(",");
-            if (split.length == nameSplit.length) {
-                for (int i = 0; i < split.length; i++) {
-                    SelectorOptions so = new SelectorOptions();
-                    so.setName(nameSplit[i]);
-                    so.setValue(split[i]);
-                    if (!categoryOptions.contains(so)) {
-                        categoryOptions.add(so);
+                String categoryNamePath = categoryNameBuckets.get(0).getKey().toString();
+                String[] split = ArrayUtil.distinct(categoryPath.split(","));
+                String[] nameSplit = categoryNamePath.split(",");
+                if (split.length == nameSplit.length) {
+                    for (int i = 0; i < split.length; i++) {
+                        SelectorOptions so = new SelectorOptions();
+                        so.setName(nameSplit[i]);
+                        so.setValue(split[i]);
+                        if (!categoryOptions.contains(so)) {
+                            categoryOptions.add(so);
+                        }
                     }
                 }
             }
+
         }
         return categoryOptions;
     }
@@ -604,17 +616,11 @@ public class EsGoodsSearchServiceImpl implements EsGoodsSearchService {
     private List<FunctionScoreQueryBuilder.FilterFunctionBuilder> buildFunctionSearch() {
         List<FunctionScoreQueryBuilder.FilterFunctionBuilder> filterFunctionBuilders = new ArrayList<>();
 
-//        GaussDecayFunctionBuilder skuNoScore = ScoreFunctionBuilders.gaussDecayFunction("skuSource", 100, 10).setWeight(2);
-//        FunctionScoreQueryBuilder.FilterFunctionBuilder skuNoBuilder = new FunctionScoreQueryBuilder.FilterFunctionBuilder(skuNoScore);
-//        filterFunctionBuilders.add(skuNoBuilder);
+        // 修改分数算法为无，数字最大分数越高
         FieldValueFactorFunctionBuilder skuNoScore = ScoreFunctionBuilders.fieldValueFactorFunction("skuSource").modifier(FieldValueFactorFunction.Modifier.LOG1P).setWeight(3);
         FunctionScoreQueryBuilder.FilterFunctionBuilder skuNoBuilder = new FunctionScoreQueryBuilder.FilterFunctionBuilder(skuNoScore);
         filterFunctionBuilders.add(skuNoBuilder);
 
-        // 修改分数算法为无，数字最大分数越高
-//        FieldValueFactorFunctionBuilder buyCountScore = ScoreFunctionBuilders.fieldValueFactorFunction("buyCount").modifier(FieldValueFactorFunction.Modifier.NONE).setWeight(10);
-//        FunctionScoreQueryBuilder.FilterFunctionBuilder buyCountBuilder = new FunctionScoreQueryBuilder.FilterFunctionBuilder(buyCountScore);
-//        filterFunctionBuilders.add(buyCountBuilder);
         return filterFunctionBuilders;
     }
 

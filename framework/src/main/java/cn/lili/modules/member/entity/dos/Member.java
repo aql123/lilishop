@@ -3,6 +3,7 @@ package cn.lili.modules.member.entity.dos;
 import cn.lili.common.enums.ClientTypeEnum;
 import cn.lili.common.security.sensitive.Sensitive;
 import cn.lili.common.security.sensitive.enums.SensitiveStrategy;
+import cn.lili.common.utils.CommonUtil;
 import cn.lili.mybatis.BaseEntity;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
@@ -101,7 +102,7 @@ public class Member extends BaseEntity {
         this.username = username;
         this.password = password;
         this.mobile = mobile;
-        this.nickName = "临时昵称";
+        this.nickName = CommonUtil.getSpecialStr("用户");
         this.disabled = true;
         this.haveStore = false;
         this.sex = 0;
@@ -110,24 +111,10 @@ public class Member extends BaseEntity {
         this.lastLoginDate = new Date();
     }
 
-    public Member(String username, String password, String mobile, String nickName, String face) {
+    public Member(String username, String password, String face, String nickName, Integer sex,String mobile) {
         this.username = username;
         this.password = password;
         this.mobile = mobile;
-        this.nickName = nickName;
-        this.disabled = true;
-        this.haveStore = false;
-        this.face = face;
-        this.sex = 0;
-        this.point = 0L;
-        this.totalPoint = 0L;
-        this.lastLoginDate = new Date();
-    }
-
-    public Member(String username, String password, String face, String nickName, Integer sex) {
-        this.username = username;
-        this.password = password;
-        this.mobile = "";
         this.nickName = nickName;
         this.disabled = true;
         this.haveStore = false;

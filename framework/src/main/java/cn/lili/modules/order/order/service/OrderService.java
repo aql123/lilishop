@@ -6,6 +6,7 @@ import cn.lili.modules.order.order.entity.dos.Order;
 import cn.lili.modules.order.order.entity.dto.OrderExportDTO;
 import cn.lili.modules.order.order.entity.dto.OrderMessage;
 import cn.lili.modules.order.order.entity.dto.OrderSearchParams;
+import cn.lili.modules.order.order.entity.dto.PartDeliveryParamsDTO;
 import cn.lili.modules.order.order.entity.vo.OrderDetailVO;
 import cn.lili.modules.order.order.entity.vo.OrderSimpleVO;
 import cn.lili.modules.order.order.entity.vo.PaymentLog;
@@ -32,8 +33,9 @@ public interface OrderService extends IService<Order> {
      *
      * @param orderSn 订单编号
      * @param reason  错误原因
+     * @param refundMoney 是否退款
      */
-    void systemCancel(String orderSn, String reason);
+    void systemCancel(String orderSn, String reason,Boolean refundMoney);
 
     /**
      * 根据sn查询
@@ -310,4 +312,20 @@ public interface OrderService extends IService<Order> {
      */
     boolean checkFictitiousOrder(String pintuanId, Integer requiredNum, Boolean fictitious);
 
+    /**
+     * 订单部分发货
+     *
+     * @param partDeliveryParamsDTO 参数
+     * @return 订单
+     */
+    Order partDelivery(PartDeliveryParamsDTO partDeliveryParamsDTO);
+
+    /**
+     * 卖家订单备注
+     *
+     * @param orderSn 订单编号
+     * @param sellerRemark  卖家订单备注
+     * @return 订单
+     */
+    Order updateSellerRemark(String orderSn, String sellerRemark);
 }

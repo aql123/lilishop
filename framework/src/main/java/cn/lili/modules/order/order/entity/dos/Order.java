@@ -84,7 +84,7 @@ public class Order extends BaseEntity {
     private String receivableNo;
 
     /**
-     * @see  PaymentMethodEnum
+     * @see PaymentMethodEnum
      */
     @ApiModelProperty(value = "支付方式")
     private String paymentMethod;
@@ -147,6 +147,9 @@ public class Order extends BaseEntity {
 
     @ApiModelProperty(value = "买家订单备注")
     private String remark;
+
+    @ApiModelProperty(value = "卖家订单备注")
+    private String sellerRemark;
 
     @ApiModelProperty(value = "订单取消原因")
     private String cancelReason;
@@ -242,7 +245,7 @@ public class Order extends BaseEntity {
         this.setRemark(cartVO.getRemark());
         this.setFreightPrice(tradeDTO.getPriceDetailDTO().getFreightPrice());
         //会员收件信息
-        if(DeliveryMethodEnum.LOGISTICS.name().equals(cartVO.getDeliveryMethod())){
+        if (tradeDTO.getMemberAddress() != null && DeliveryMethodEnum.LOGISTICS.name().equals(cartVO.getDeliveryMethod())) {
             this.setConsigneeAddressIdPath(tradeDTO.getMemberAddress().getConsigneeAddressIdPath());
             this.setConsigneeAddressPath(tradeDTO.getMemberAddress().getConsigneeAddressPath());
             this.setConsigneeDetail(tradeDTO.getMemberAddress().getDetail());
@@ -250,7 +253,7 @@ public class Order extends BaseEntity {
             this.setConsigneeName(tradeDTO.getMemberAddress().getName());
         }
         //自提点信息
-        if(DeliveryMethodEnum.SELF_PICK_UP.name().equals(cartVO.getDeliveryMethod())){
+        if (tradeDTO.getStoreAddress() != null && DeliveryMethodEnum.SELF_PICK_UP.name().equals(cartVO.getDeliveryMethod())) {
             this.setStoreAddressPath(tradeDTO.getStoreAddress().getAddress());
             this.setStoreAddressMobile(tradeDTO.getStoreAddress().getMobile());
             this.setStoreAddressCenter(tradeDTO.getStoreAddress().getCenter());

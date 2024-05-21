@@ -205,6 +205,7 @@ public enum ResultCode {
     POINT_NOT_ENOUGH(31015, "当前会员积分不足购买当前积分商品！"),
     ORDER_LABEL_ORDER_ERROR(31016, "订单不能打印电子面单"),
     ORDER_PRICE_ERROR(31017,"订单金额不能小于等于0"),
+    ORDER_PACKAGE_NOT_EXIST(31017, "当前订单包裹不存在！"),
 
 
     /**
@@ -418,7 +419,7 @@ public enum ResultCode {
     STORE_CLOSE_ERROR(50006, "店铺关闭，请联系管理员"),
     STORE_DELIVER_GOODS_ADDRESS(50007,"请填写商家发货地址"),
     FREIGHT_TEMPLATE_NOT_EXIST(50010, "当前模版不存在"),
-    STORE_STATUS_ERROR(50011, "店铺状态异常，无法申请"),
+    STORE_STATUS_ERROR(50011, "店铺在申请中或审核中，请勿重复操作"),
     STORE_DELIVER_ADDRESS_EXIST(50012,"请填写发货地址"),
 
     /**
@@ -495,6 +496,9 @@ public enum ResultCode {
     WECHAT_MP_MESSAGE_TMPL_ERROR(80306, "未能获取到微信模版消息id"),
     WECHAT_ERROR(80307, "微信接口异常"),
     APP_VERSION_EXIST(80307, "APP版本已存在"),
+    APP_VERSION_PARAM_ERROR(80308, "添加APP版本参数异常"),
+    // 未选择APP类型
+    APP_VERSION_TYPE_ERROR(80308, "请选择有效的APP类型"),
 
     /**
      * IM
@@ -511,6 +515,7 @@ public enum ResultCode {
     CONNECT_NOT_EXIST(90000, "登录方式不存在！"),
     ELASTICSEARCH_INDEX_INIT_ERROR(90003, "索引初始化失败！"),
     PURCHASE_ORDER_DEADLINE_ERROR(90004, "供求单，已超过报名截止时间"),
+    USER_ADD_ERROR(90005, "用户添加失败"),
     INDEX_BUILDING(90005, "索引正在生成");
 
 

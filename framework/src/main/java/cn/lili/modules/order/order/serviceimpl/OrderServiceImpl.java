@@ -18,23 +18,17 @@ import cn.lili.common.security.context.UserContext;
 import cn.lili.common.security.enums.UserEnums;
 import cn.lili.common.utils.SnowFlake;
 import cn.lili.modules.goods.entity.dto.GoodsCompleteMessage;
-import cn.lili.modules.logistics.entity.enums.LogisticsEnum;
 import cn.lili.modules.member.entity.dto.MemberAddressDTO;
-import cn.lili.modules.member.service.StoreLogisticsService;
 import cn.lili.modules.order.cart.entity.dto.TradeDTO;
 import cn.lili.modules.order.cart.entity.enums.DeliveryMethodEnum;
 import cn.lili.modules.order.order.aop.OrderLogPoint;
 import cn.lili.modules.order.order.entity.dos.*;
-import cn.lili.modules.order.order.entity.dto.OrderBatchDeliverDTO;
-import cn.lili.modules.order.order.entity.dto.OrderExportDTO;
-import cn.lili.modules.order.order.entity.dto.OrderMessage;
-import cn.lili.modules.order.order.entity.dto.OrderSearchParams;
+import cn.lili.modules.order.order.entity.dto.*;
 import cn.lili.modules.order.order.entity.enums.*;
 import cn.lili.modules.order.order.entity.vo.OrderDetailVO;
 import cn.lili.modules.order.order.entity.vo.OrderSimpleVO;
 import cn.lili.modules.order.order.entity.vo.OrderVO;
 import cn.lili.modules.order.order.entity.vo.PaymentLog;
-import cn.lili.modules.order.order.mapper.OrderItemMapper;
 import cn.lili.modules.order.order.mapper.OrderMapper;
 import cn.lili.modules.order.order.service.*;
 import cn.lili.modules.order.trade.entity.dos.OrderLog;
@@ -46,9 +40,12 @@ import cn.lili.modules.store.entity.dto.StoreDeliverGoodsAddressDTO;
 import cn.lili.modules.store.service.StoreDetailService;
 import cn.lili.modules.system.aspect.annotation.SystemLogPoint;
 import cn.lili.modules.system.entity.dos.Logistics;
-import cn.lili.modules.system.entity.dto.LogisticsSetting;
+import cn.lili.modules.system.entity.dos.Setting;
+import cn.lili.modules.system.entity.dto.OrderSetting;
+import cn.lili.modules.system.entity.enums.SettingEnum;
 import cn.lili.modules.system.entity.vo.Traces;
 import cn.lili.modules.system.service.LogisticsService;
+import cn.lili.modules.system.service.SettingService;
 import cn.lili.mybatis.util.PageUtil;
 import cn.lili.rocketmq.RocketmqSendCallbackBuilder;
 import cn.lili.rocketmq.tags.GoodsTagsEnum;
@@ -75,7 +72,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.annotation.Resource;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
 import java.io.InputStream;
@@ -100,11 +96,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
      */
     @Autowired
     private TimeTrigger timeTrigger;
-    /**
-     * 订单货物数据层
-     */
-    @Resource
-    private OrderItemMapper orderItemMapper;
     /**
      * 发票
      */
@@ -156,6 +147,20 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Autowired
     private StoreDetailService storeDetailService;
 
+    /**
+     * 订单包裹
+     */
+    @Autowired
+    private OrderPackageService orderPackageService;
+    /**
+     * 订单包裹货物
+     */
+    @Autowired
+    private OrderPackageItemService orderPackageItemService;
+
+    @Autowired
+    private SettingService settingService;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void intoDB(TradeDTO tradeDTO) {
@@ -181,7 +186,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             orders.add(order);
             String message = "订单[" + item.getSn() + "]创建";
             //记录日志
-            orderLogs.add(new OrderLog(item.getSn(), UserContext.getCurrentUser().getId(), UserContext.getCurrentUser().getRole().getRole(), UserContext.getCurrentUser().getUsername(), message));
+            orderLogs.add(new OrderLog(item.getSn(), UserContext.getCurrentUser().getId(), UserContext.getCurrentUser().getRole().getRole(),
+                    UserContext.getCurrentUser().getUsername(), message));
             item.getCheckedSkuList().forEach(
                     sku -> {
                         orderItems.add(new OrderItem(sku, item, tradeDTO));
@@ -270,7 +276,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         LambdaQueryWrapper<Order> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(Order::getOrderPromotionType, PromotionTypeEnum.PINTUAN.name());
         queryWrapper.eq(Order::getPromotionId, pintuanId);
-        queryWrapper.nested(i -> i.eq(Order::getPayStatus, PayStatusEnum.PAID.name()).or(j -> j.eq(Order::getOrderStatus, OrderStatusEnum.PAID.name())));
+        queryWrapper.nested(i -> i.eq(Order::getPayStatus, PayStatusEnum.PAID.name()).or(j -> j.eq(Order::getOrderStatus,
+                OrderStatusEnum.PAID.name())));
+        queryWrapper.ne(Order::getOrderStatus, OrderStatusEnum.CANCELLED.name());
         return this.list(queryWrapper);
     }
 
@@ -285,10 +293,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         if (order == null) {
             throw new ServiceException(ResultCode.ORDER_NOT_EXIST);
         }
-        QueryWrapper<OrderItem> orderItemWrapper = new QueryWrapper<>();
-        orderItemWrapper.eq(ORDER_SN_COLUMN, orderSn);
         //查询订单项信息
-        List<OrderItem> orderItems = orderItemMapper.selectList(orderItemWrapper);
+        List<OrderItem> orderItems = orderItemService.getByOrderSn(orderSn);
         //查询订单日志信息
         List<OrderLog> orderLogs = orderLogService.getOrderLog(orderSn);
         //查询发票信息
@@ -304,14 +310,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         Order order = OperationalJudgment.judgment(this.getBySn(orderSn));
         //如果订单促销类型不为空&&订单是拼团订单，并且订单未成团，则抛出异常
         if (OrderPromotionTypeEnum.PINTUAN.name().equals(order.getOrderPromotionType())
-                && !CharSequenceUtil.equalsAny(order.getOrderStatus(), OrderStatusEnum.UNDELIVERED.name(), OrderStatusEnum.STAY_PICKED_UP.name())) {
+            && !CharSequenceUtil.equalsAny(order.getOrderStatus(), OrderStatusEnum.TAKE.name(), OrderStatusEnum.UNDELIVERED.name(),
+                OrderStatusEnum.STAY_PICKED_UP.name())) {
             throw new ServiceException(ResultCode.ORDER_CAN_NOT_CANCEL);
         }
         if (CharSequenceUtil.equalsAny(order.getOrderStatus(),
                 OrderStatusEnum.UNDELIVERED.name(),
                 OrderStatusEnum.UNPAID.name(),
                 OrderStatusEnum.STAY_PICKED_UP.name(),
-                OrderStatusEnum.PAID.name())) {
+                OrderStatusEnum.PAID.name(),
+                OrderStatusEnum.TAKE.name())) {
 
             order.setOrderStatus(OrderStatusEnum.CANCELLED.name());
             order.setCancelReason(reason);
@@ -330,14 +338,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Override
     @OrderLogPoint(description = "'订单['+#orderSn+']系统取消，原因为：'+#reason", orderSn = "#orderSn")
     @Transactional(rollbackFor = Exception.class)
-    public void systemCancel(String orderSn, String reason) {
+    public void systemCancel(String orderSn, String reason, Boolean refundMoney) {
         Order order = this.getBySn(orderSn);
         order.setOrderStatus(OrderStatusEnum.CANCELLED.name());
         order.setCancelReason(reason);
         this.updateById(order);
-        //生成店铺退款流水
-        this.generatorStoreRefundFlow(order);
-        orderStatusMessage(order);
+        if (refundMoney) {
+            //生成店铺退款流水
+            this.generatorStoreRefundFlow(order);
+            orderStatusMessage(order);
+        }
     }
 
     /**
@@ -408,9 +418,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
     }
 
-
     @Override
-    @SystemLogPoint(description = "修改订单", customerLog = "'订单[' + #orderSn + ']收货信息修改，修改为'+#memberAddressDTO.consigneeDetail+'")
+    @SystemLogPoint(description = "修改订单", customerLog = "'订单[' + #orderSn + ']收货信息修改，修改为'+#memberAddressDTO.consigneeDetail")
     @Transactional(rollbackFor = Exception.class)
     public Order updateConsignee(String orderSn, MemberAddressDTO memberAddressDTO) {
         Order order = OperationalJudgment.judgment(this.getBySn(orderSn));
@@ -421,7 +430,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         BeanUtil.copyProperties(memberAddressDTO, order);
         this.updateById(order);
 
-        OrderLog orderLog = new OrderLog(orderSn, UserContext.getCurrentUser().getId(), UserContext.getCurrentUser().getRole().getRole(), UserContext.getCurrentUser().getUsername(), message);
+        OrderLog orderLog = new OrderLog(orderSn, UserContext.getCurrentUser().getId(), UserContext.getCurrentUser().getRole().getRole(),
+                UserContext.getCurrentUser().getUsername(), message);
         orderLogService.save(orderLog);
 
         return order;
@@ -468,8 +478,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     public Order shunFengDelivery(String orderSn) {
         OrderDetailVO orderDetailVO = this.queryDetail(orderSn);
         String logisticsNo = logisticsService.sfCreateOrder(orderDetailVO);
-        Logistics logistics = logisticsService.getOne(new LambdaQueryWrapper<Logistics>().eq(Logistics::getCode,"SF"));
-        return delivery(orderSn,logisticsNo,logistics.getId());
+        Logistics logistics = logisticsService.getOne(new LambdaQueryWrapper<Logistics>().eq(Logistics::getCode, "SF"));
+        return delivery(orderSn, logisticsNo, logistics.getId());
     }
 
     @Override
@@ -486,7 +496,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         Order order = this.getBySn(orderSn);
         //获取店家信息
         StoreDeliverGoodsAddressDTO storeDeliverGoodsAddressDTO = storeDetailService.getStoreDeliverGoodsAddressDto(order.getStoreId());
-        String from = storeDeliverGoodsAddressDTO.getSalesConsignorAddressPath().substring(0, storeDeliverGoodsAddressDTO.getSalesConsignorAddressPath().indexOf(",") - 1);
+        String from = storeDeliverGoodsAddressDTO.getSalesConsignorAddressPath().substring(0,
+                storeDeliverGoodsAddressDTO.getSalesConsignorAddressPath().indexOf(",") - 1);
         String to = order.getConsigneeAddressPath().substring(0, order.getConsigneeAddressPath().indexOf(",") - 1);
         //获取踪迹信息
         return logisticsService.getLogisticMapTrack(order.getLogisticsCode(), order.getLogisticsNo(), order.getConsigneeMobile(), from, to);
@@ -523,10 +534,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Override
     public Order getOrderByVerificationCode(String verificationCode) {
         String storeId = Objects.requireNonNull(UserContext.getCurrentUser()).getStoreId();
-        return this.getOne(new LambdaQueryWrapper<Order>()
+        Order order = this.getOne(new LambdaQueryWrapper<Order>()
                 .in(Order::getOrderStatus, OrderStatusEnum.TAKE.name(), OrderStatusEnum.STAY_PICKED_UP.name())
                 .eq(Order::getStoreId, storeId)
                 .eq(Order::getVerificationCode, verificationCode));
+        if (order == null) {
+            throw new ServiceException(ResultCode.ORDER_TAKE_ERROR);
+        }
+        return order;
     }
 
     @Override
@@ -555,11 +570,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Transactional(rollbackFor = Exception.class)
     public void complete(Order order, String orderSn) {//修改订单状态为完成
         this.updateStatus(orderSn, OrderStatusEnum.COMPLETED);
-
         //修改订单货物可以进行评价
         orderItemService.update(new UpdateWrapper<OrderItem>().eq(ORDER_SN_COLUMN, orderSn)
                 .set("comment_status", CommentStatusEnum.UNFINISHED));
         this.update(new LambdaUpdateWrapper<Order>().eq(Order::getSn, orderSn).set(Order::getCompleteTime, new Date()));
+
+        //修改订单投诉状态
+        updateOrderComplainStatus(orderSn);
+
         //发送订单状态改变消息
         OrderMessage orderMessage = new OrderMessage();
         orderMessage.setNewStatus(OrderStatusEnum.COMPLETED);
@@ -594,7 +612,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void sendUpdateStatusMessage(OrderMessage orderMessage) {
-        applicationEventPublisher.publishEvent(new TransactionCommitSendMQEvent("发送订单变更mq消息", rocketmqCustomProperties.getOrderTopic(), OrderTagsEnum.STATUS_CHANGE.name(), JSONUtil.toJsonStr(orderMessage)));
+        applicationEventPublisher.publishEvent(new TransactionCommitSendMQEvent("发送订单变更mq消息", rocketmqCustomProperties.getOrderTopic(),
+                OrderTagsEnum.STATUS_CHANGE.name(), JSONUtil.toJsonStr(orderMessage)));
     }
 
     @Override
@@ -715,7 +734,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         Trade trade = tradeService.getBySn(order.getTradeSn());
         //如果交易不为空，则返回交易的金额，否则返回订单金额
         if (CharSequenceUtil.isNotEmpty(trade.getPayStatus())
-                && trade.getPayStatus().equals(PayStatusEnum.PAID.name())) {
+            && trade.getPayStatus().equals(PayStatusEnum.PAID.name())) {
             return trade.getFlowPrice();
         }
         return order.getFlowPrice();
@@ -778,10 +797,13 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 //如果未开启虚拟成团且已参团人数小于成团人数，则自动取消订单
                 String reason = "拼团活动结束订单未付款，系统自动取消订单";
                 if (CharSequenceUtil.isNotEmpty(entry.getKey())) {
-                    this.systemCancel(entry.getKey(), reason);
+                    this.systemCancel(entry.getKey(), reason, true);
                 } else {
                     for (Order order : entry.getValue()) {
-                        this.systemCancel(order.getSn(), reason);
+                        if (!CharSequenceUtil.equalsAny(order.getOrderStatus(), OrderStatusEnum.COMPLETED.name(), OrderStatusEnum.DELIVERED.name(),
+                                OrderStatusEnum.TAKE.name(), OrderStatusEnum.STAY_PICKED_UP.name())) {
+                            this.systemCancel(order.getSn(), reason, true);
+                        }
                     }
                 }
             } else if (Boolean.TRUE.equals(fictitious)) {
@@ -791,20 +813,99 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         return false;
     }
 
+    @Override
+    public Order partDelivery(PartDeliveryParamsDTO partDeliveryParamsDTO) {
+        String logisticsId = partDeliveryParamsDTO.getLogisticsId();
+        String orderSn = partDeliveryParamsDTO.getOrderSn();
+        String invoiceNumber = partDeliveryParamsDTO.getLogisticsNo();
+
+        //获取对应物流
+        Logistics logistics = logisticsService.getById(logisticsId);
+        if (logistics == null) {
+            throw new ServiceException(ResultCode.ORDER_LOGISTICS_ERROR);
+        }
+        Order order = OperationalJudgment.judgment(this.getBySn(orderSn));
+        List<OrderItem> orderItemList = orderItemService.getByOrderSn(orderSn);
+
+        OrderPackage orderPackage = new OrderPackage();
+        orderPackage.setPackageNo(SnowFlake.createStr("OP"));
+        orderPackage.setOrderSn(orderSn);
+        orderPackage.setLogisticsNo(invoiceNumber);
+        orderPackage.setLogisticsCode(logistics.getCode());
+        orderPackage.setLogisticsName(logistics.getName());
+        orderPackage.setStatus("1");
+        orderPackage.setConsigneeMobile(order.getConsigneeMobile());
+        orderPackageService.save(orderPackage);
+        List<OrderLog> orderLogList = new ArrayList<>();
+        for (PartDeliveryDTO partDeliveryDTO : partDeliveryParamsDTO.getPartDeliveryDTOList()) {
+            for (OrderItem orderItem : orderItemList) {
+                //寻找订单货物进行判断
+                if (partDeliveryDTO.getOrderItemId().equals(orderItem.getId())) {
+                    if ((partDeliveryDTO.getDeliveryNum() + orderItem.getDeliverNumber()) > orderItem.getNum()) {
+                        throw new ServiceException("发货数量不正确!");
+                    }
+                    orderItem.setDeliverNumber((partDeliveryDTO.getDeliveryNum() + orderItem.getDeliverNumber()));
+
+                    // 记录分包裹中每个item子单的具体发货信息
+                    OrderPackageItem orderPackageItem = new OrderPackageItem();
+                    orderPackageItem.setOrderSn(orderSn);
+                    orderPackageItem.setPackageNo(orderPackage.getPackageNo());
+                    orderPackageItem.setOrderItemSn(orderItem.getSn());
+                    orderPackageItem.setDeliverNumber(partDeliveryDTO.getDeliveryNum());
+                    orderPackageItem.setLogisticsTime(new Date());
+                    orderPackageItem.setGoodsName(orderItem.getGoodsName());
+                    orderPackageItem.setThumbnail(orderItem.getImage());
+                    orderPackageItemService.save(orderPackageItem);
+                    OrderLog orderLog = new OrderLog(orderSn, UserContext.getCurrentUser().getId(),
+                            UserContext.getCurrentUser().getRole().getRole(), UserContext.getCurrentUser().getUsername(), "订单 [ " + orderSn + " ]商品" +
+                                                                                                                          " [ " + orderItem.getGoodsName() + " ]发货，发货数量: [ " + partDeliveryDTO.getDeliveryNum() + " ]，发货单号[ " + invoiceNumber + " ]");
+                    orderLogList.add(orderLog);
+                }
+            }
+        }
+        //修改订单货物
+        orderItemService.updateBatchById(orderItemList);
+
+
+        orderLogService.saveBatch(orderLogList);
+        //判断订单货物是否全部发货完毕
+        Boolean delivery = true;
+        for (OrderItem orderItem : orderItemList) {
+            if (orderItem.getDeliverNumber() < orderItem.getNum()) {
+                delivery = false;
+                break;
+            }
+        }
+        //是否全部发货
+        if (delivery) {
+            return delivery(orderSn, invoiceNumber, logisticsId);
+        }
+        return order;
+    }
+
+    @Override
+    public Order updateSellerRemark(String orderSn, String sellerRemark) {
+        Order order = this.getBySn(orderSn);
+        order.setSellerRemark(sellerRemark);
+        this.updateById(order);
+        return order;
+    }
+
     /**
      * 虚拟成团
      *
      * @param entry       订单列表
      * @param requiredNum 必须参团人数
      */
-    private void fictitiousPintuan(Map.Entry<String, List<Order>> entry, Integer requiredNum) {
+    @Transactional(rollbackFor = Exception.class)
+    public void fictitiousPintuan(Map.Entry<String, List<Order>> entry, Integer requiredNum) {
         Map<String, List<Order>> listMap = entry.getValue().stream().collect(Collectors.groupingBy(Order::getPayStatus));
         //未付款订单
         List<Order> unpaidOrders = listMap.get(PayStatusEnum.UNPAID.name());
         //未付款订单自动取消
         if (unpaidOrders != null && !unpaidOrders.isEmpty()) {
             for (Order unpaidOrder : unpaidOrders) {
-                this.systemCancel(unpaidOrder.getSn(), "拼团活动结束订单未付款，系统自动取消订单");
+                this.systemCancel(unpaidOrder.getSn(), "拼团活动结束订单未付款，系统自动取消订单", false);
             }
         }
         List<Order> paidOrders = listMap.get(PayStatusEnum.PAID.name());
@@ -825,9 +926,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 paidOrders.add(order);
             }
             for (Order paidOrder : paidOrders) {
-                paidOrder.setOrderStatus(OrderStatusEnum.UNDELIVERED.name());
-                this.updateById(paidOrder);
-                orderStatusMessage(paidOrder);
+                if (!CharSequenceUtil.equalsAny(paidOrder.getOrderStatus(), OrderStatusEnum.COMPLETED.name(), OrderStatusEnum.DELIVERED.name(),
+                        OrderStatusEnum.TAKE.name(), OrderStatusEnum.STAY_PICKED_UP.name())) {
+                    if (OrderTypeEnum.NORMAL.name().equals(paidOrder.getOrderType())) {
+                        paidOrder.setOrderStatus(OrderStatusEnum.UNDELIVERED.name());
+                    } else if (OrderTypeEnum.VIRTUAL.name().equals(paidOrder.getOrderType())) {
+                        paidOrder.setOrderStatus(OrderStatusEnum.TAKE.name());
+                    }
+                    this.updateById(paidOrder);
+                    orderStatusMessage(paidOrder);
+                }
             }
         }
     }
@@ -883,7 +991,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
      * @param pintuanId     拼团活动ID
      * @param parentOrderSn 拼团父订单编号
      */
-    private void checkPintuanOrder(String pintuanId, String parentOrderSn) {
+    @Transactional(rollbackFor = Exception.class)
+    public void checkPintuanOrder(String pintuanId, String parentOrderSn) {
         //获取拼团配置
         Pintuan pintuan = pintuanService.getById(pintuanId);
         List<Order> list = this.getPintuanOrder(pintuanId, parentOrderSn);
@@ -893,6 +1002,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             PintuanOrderMessage pintuanOrderMessage = new PintuanOrderMessage();
             //开团结束时间
             long startTime = DateUtil.offsetHour(new Date(), 24).getTime();
+            if (DateUtil.compare(DateUtil.offsetHour(pintuan.getStartTime(), 24), pintuan.getEndTime()) > 0) {
+                startTime = pintuan.getEndTime().getTime();
+            }
             pintuanOrderMessage.setOrderSn(parentOrderSn);
             pintuanOrderMessage.setPintuanId(pintuanId);
             TimeTriggerMsg timeTriggerMsg = new TimeTriggerMsg(TimeExecuteConstant.PROMOTION_EXECUTOR,
@@ -925,6 +1037,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         //拼团sn=开团订单sn 或者 参团订单的开团订单sn
         queryWrapper.and(i -> i.eq(Order::getSn, parentOrderSn)
                 .or(j -> j.eq(Order::getParentOrderSn, parentOrderSn)));
+        queryWrapper.ne(Order::getOrderStatus, OrderStatusEnum.CANCELLED.name());
         //参团后的订单数（人数）
         return this.list(queryWrapper);
     }
@@ -935,7 +1048,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
      *
      * @param orderList 需要更新拼团状态为成功的拼团订单列表
      */
-    private void pintuanOrderSuccess(List<Order> orderList) {
+    @Transactional(rollbackFor = Exception.class)
+    public void pintuanOrderSuccess(List<Order> orderList) {
         for (Order order : orderList) {
             if (order.getOrderType().equals(OrderTypeEnum.VIRTUAL.name())) {
                 this.virtualOrderConfirm(order.getSn());
@@ -953,7 +1067,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private void pintuanOrderFailed(List<Order> list) {
         for (Order order : list) {
             try {
-                this.systemCancel(order.getSn(), "拼团人数不足，拼团失败！");
+                this.systemCancel(order.getSn(), "拼团人数不足，拼团失败！", true);
             } catch (Exception e) {
                 log.error("拼团订单取消失败", e);
             }
@@ -1046,5 +1160,28 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         if (!verificationCode.equals(order.getVerificationCode())) {
             throw new ServiceException(ResultCode.ORDER_TAKE_ERROR);
         }
+    }
+
+    /**
+     * 根据订单设置修改订单投诉状态
+     *
+     * @param orderSn
+     */
+    private void updateOrderComplainStatus(String orderSn) {
+        Setting setting = settingService.get(SettingEnum.ORDER_SETTING.name());
+        //订单设置
+        OrderSetting orderSetting = JSONUtil.toBean(setting.getSettingValue(), OrderSetting.class);
+        if (orderSetting == null) {
+            return;
+        }
+        //设置投诉天数大于0 则走每日定时任务处理，=0 则即可关闭订单的投诉状态
+        if (orderSetting.getCloseComplaint() > 0) {
+            return;
+        }
+        //关闭订单投诉状态
+        LambdaUpdateWrapper<OrderItem> lambdaUpdateWrapper = new LambdaUpdateWrapper<OrderItem>()
+                .eq(OrderItem::getOrderSn, orderSn)
+                .set(OrderItem::getComplainStatus, OrderComplaintStatusEnum.EXPIRED.name());
+        orderItemService.update(lambdaUpdateWrapper);
     }
 }
